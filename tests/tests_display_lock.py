@@ -10,16 +10,17 @@ from tqdm import tqdm
 
 
 class FailingIO(StringIO):
-    error = None
+    error = OSError()
     operation = None
+    failing = False
 
     def write(self, value):
-        if self.operation == 'write' and self.error is not None:
+        if self.operation == 'write' and self.failing:
             raise self.error
         return super().write(value)
 
     def flush(self):
-        if self.operation == 'flush' and self.error is not None:
+        if self.operation == 'flush' and self.failing:
             raise self.error
         return super().flush()
 
@@ -48,7 +49,7 @@ def lock_available(lock):
 def test_display_error_releases_lock(thread_lock, method, operation, mode):
     with FailingIO() as file, tqdm(file=file) as bar:
         error = OSError(errno.ENOSPC, 'output failed')
-        file.error, file.operation = error, operation
+        file.error, file.operation, file.failing = error, operation, True
         nolock = mode == 'nolock'
         kwargs = {'nolock': nolock}
         if mode == 'lock_args' and method == 'refresh':
@@ -62,7 +63,7 @@ def test_display_error_releases_lock(thread_lock, method, operation, mode):
             assert not bar.disable
             assert lock_available(thread_lock) is (not nolock)
         finally:
-            file.error = None
+            file.failing = False
             # Drain any leaked acquisitions even on the unfixed implementation,
             # so a failing regression cannot deadlock later tests or the monitor.
             while True:
@@ -78,14 +79,14 @@ def test_display_error_releases_lock(thread_lock, method, operation, mode):
 def test_display_suppressed_error(thread_lock, method, operation):
     with FailingIO() as file, tqdm(file=file) as bar:
         file.error = OSError(errno.EIO, 'output failed')
-        file.operation = operation
+        file.operation, file.failing = operation, True
         try:
             getattr(bar, method)()
             assert bar.miniters == float('inf')
             assert not bar.disable
             assert lock_available(thread_lock)
         finally:
-            file.error = None
+            file.failing = False
 
 
 @mark.parametrize('method', ['clear', 'refresh'])
